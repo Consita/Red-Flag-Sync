@@ -14,7 +14,7 @@ and personal notes as your personal list.
 ## Installation
 **WowUp:** *Get Addons* → *Install from URL* → paste `https://github.com/Consita/Red-Flag-Sync`
 
-**Manually:** download `RedFlagSync-x.y.zip` from the latest
+**Manually:** download `RedFlagSync-x.y-bc.zip` from the latest
 [release](https://github.com/Consita/Red-Flag-Sync/releases) and extract it into
 `World of Warcraft\_anniversary_\Interface\AddOns\` (you should end up with an `AddOns\RedFlagSync` folder).
 
