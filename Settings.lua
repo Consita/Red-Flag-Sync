@@ -111,6 +111,8 @@ local function Create()
         "Only members of this guild who run Red Flag Sync take part, and nothing is ever posted " ..
         "in chat. Personal lists and personal notes are never sent. When none of your characters " ..
         "is in a guild anymore, its guild list is deleted.")
+    -- grow the window to fit the text (font sizes differ between UI setups)
+    f:SetHeight(228 + info:GetStringHeight() + 24)
 
     frame = f
 end
