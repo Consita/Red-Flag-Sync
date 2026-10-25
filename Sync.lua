@@ -470,7 +470,9 @@ function RS:Digest()
             sum = sum + (e.mod or 0)
         end
     end
-    return ("%d:%d"):format(count, sum)
+    -- %d only takes 32-bit numbers in WoW; the sum of timestamps is far larger, so print it
+    -- as a whole number with %.0f (exact up to 2^53, i.e. millions of entries)
+    return ("%d:%.0f"):format(count, sum)
 end
 
 ------------------------------------------------------------------------
