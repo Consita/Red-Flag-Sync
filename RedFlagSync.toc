@@ -1,8 +1,8 @@
-## Interface: 20504, 20505, 20506
+## Interface: 20504, 20505, 20506, 16001
 ## Title: Red Flag Sync
 ## Notes: Adds guild lists to Red Flag and shares them with your guild members
 ## Author: Consita
-## Version: 1.0
+## Version: 1.0.1
 ## SavedVariables: RedFlagSyncDB
 ## Dependencies: RedFlag, Ace3
 
