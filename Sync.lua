@@ -59,6 +59,13 @@ local function Print(msg) API.Print(msg) end
 
 local function Now() return GetServerTime and GetServerTime() or time() end
 
+-- WoW Forever (interface 1.6x): characters have a first name and a surname instead of a realm.
+-- The game returns the surname where other clients return the realm, and Red Flag stores it in
+-- the entries' "realm" field. First names alone are not unique there, so players are always
+-- identified by first name + surname.
+local TOC = select(4, GetBuildInfo()) or 0
+local IS_FOREVER = TOC >= 16000 and TOC < 20000
+
 local function MyRealm()
     local r = GetNormalizedRealmName and GetNormalizedRealmName()
     if not r or r == "" then r = (GetRealmName() or ""):gsub("[%s%-]", "") end
@@ -70,6 +77,12 @@ local function NormRealm(r)
     return (r:gsub("%s", ""))
 end
 
+-- realm (or, on WoW Forever, surname) of a player entry
+local function PlayerRealm(r)
+    if IS_FOREVER then return r or "" end
+    return NormRealm(r)
+end
+
 local function NameKey(name, realm) return "N:" .. (name .. "-" .. realm):lower() end
 local function GuildKey(name, realm) return "G:" .. (name .. "-" .. realm):lower() end
 
@@ -79,9 +92,41 @@ end
 
 local function active(e) return e and not e.del end
 
-local function FullName(name, realm)
-    if not realm or realm == MyRealm() then return name end
-    return name .. "-" .. realm
+-- my name as stamped on entries ("First Surname" on WoW Forever)
+local function MyName()
+    local name, surname = UnitName("player")
+    if IS_FOREVER and surname and surname ~= "" then return name .. " " .. surname end
+    return name
+end
+
+-- Comparable form of a player name from chat, the roster or addon messages:
+-- "name-realm" (lower case); on WoW Forever "first-surname".
+local function CanonName(full)
+    if type(full) ~= "string" or full == "" then return nil end
+    local s = full:lower()
+    if IS_FOREVER then
+        local first, surname = s:match("^%s*([^%s%-]+)[%s%-]*([^%s%-]*)")
+        if not first then return nil end
+        return (surname ~= "" and surname ~= MyRealm():lower()) and (first .. "-" .. surname) or first
+    end
+    if not s:find("-", 1, true) then s = s .. "-" .. MyRealm():lower() end
+    return s
+end
+
+local function MyCanonName()
+    local name, surname = UnitName("player")
+    if IS_FOREVER and surname and surname ~= "" then return CanonName(name .. "-" .. surname) end
+    return CanonName(name)
+end
+
+-- name to show in messages
+local function DisplayName(full)
+    if IS_FOREVER then
+        local first, surname = full:match("^%s*([^%s%-]+)[%s%-]*([^%s%-]*)")
+        if not first then return full end
+        return (surname ~= "" and surname ~= MyRealm()) and (first .. " " .. surname) or first
+    end
+    return (strsplit("-", Ambiguate(full, "none"), 2))
 end
 
 function RS:CurrentGuildKey()
@@ -156,11 +201,12 @@ end
 function provider:Find(kind, guid, name, realm)
     local t = List(kind)
     if not t then return nil end
-    realm = NormRealm(realm)
     if kind == "guilds" then
+        realm = NormRealm(realm)
         local e = name and t[GuildKey(name, realm)]
         return active(e) and e or nil
     end
+    realm = PlayerRealm(realm)
     if guid and active(t[guid]) then return t[guid] end
     if not name then return nil end
     local byName = t[NameKey(name, realm)]
@@ -178,7 +224,7 @@ function provider:Add(kind, e)
     local entry = {
         id = e.id, guid = e.guid, name = e.name, realm = e.realm, class = e.class,
         note = (e.note or ""):sub(1, MAX_NOTE),
-        by = e.by or UnitName("player"), added = e.added or now, mod = now,
+        by = e.by or MyName(), added = e.added or now, mod = now,
     }
     RS:Commit(kind, entry)
     return entry
@@ -212,7 +258,7 @@ function provider:OpenSettings() RS:ToggleSettings() end
 function RS:Commit(kind, entry)
     local d = self:GuildData(true)
     if not d then return false end
-    entry.ed = UnitName("player")
+    entry.ed = MyName()
     d[kind][entry.id] = entry
     self:BroadcastEntry(kind, entry)
     API.Refresh()
@@ -277,7 +323,11 @@ end
 -- Leaving a guild: a guild list only exists while one of my characters is in that guild.
 ------------------------------------------------------------------------
 
-local function CharKey() return UnitName("player") .. "-" .. MyRealm() end
+local function CharKey()
+    local name, surname = UnitName("player")
+    if IS_FOREVER and surname and surname ~= "" then return name .. "-" .. surname end
+    return name .. "-" .. MyRealm()
+end
 
 function RS:DropGuildList(key)
     local lists = self.db.global.guildLists
@@ -320,7 +370,7 @@ end
 -- Roster / trust
 ------------------------------------------------------------------------
 
-local guildMembers = {}   -- lowercase "name" and "name-realm" -> rankIndex (0 = guild master)
+local guildMembers = {}   -- CanonName (and, except on WoW Forever, the short name) -> rankIndex (0 = guild master)
 local onlineMembers = {}  -- full names currently online
 local pendingAnswers = {} -- requester -> true while we wait to answer
 local lastRosterRequest = 0
@@ -351,16 +401,17 @@ function RS:RebuildGuildMembers()
     wipe(onlineMembers)
     if IsInGuild() then
         local myRealm = MyRealm():lower()
-        local me = UnitName("player"):lower()
+        local me = MyCanonName()
         for i = 1, GetNumGuildMembers() do
             local full, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-            if full then
-                local lower = full:lower()
-                if not lower:find("-", 1, true) then lower = lower .. "-" .. myRealm end
-                guildMembers[lower] = rankIndex
-                local short, realm = strsplit("-", lower, 2)
-                if realm == myRealm then guildMembers[short] = rankIndex end
-                if online and short ~= me then onlineMembers[#onlineMembers + 1] = full end
+            local key = CanonName(full)
+            if key then
+                guildMembers[key] = rankIndex
+                if not IS_FOREVER then -- first names alone are not unique on WoW Forever
+                    local short, realm = strsplit("-", key, 2)
+                    if realm == myRealm then guildMembers[short] = rankIndex end
+                end
+                if online and key ~= me then onlineMembers[#onlineMembers + 1] = full end
             end
         end
     end
@@ -368,11 +419,10 @@ function RS:RebuildGuildMembers()
 end
 
 local function MemberRank(name)
-    local s = name:lower()
-    if guildMembers[s] then return guildMembers[s] end
-    if not s:find("-", 1, true) then
-        return guildMembers[s .. "-" .. MyRealm():lower()]
-    end
+    local key = CanonName(name)
+    if not key then return nil end
+    if guildMembers[key] then return guildMembers[key] end
+    if not IS_FOREVER then return guildMembers[name:lower()] end
 end
 
 -- In our guild right now and at rank `limit` or higher (lower index = higher rank).
@@ -394,12 +444,20 @@ local function MyRank()
     return rankIndex
 end
 
-local function ShortName(name)
-    return (strsplit("-", Ambiguate(name, "none"), 2))
+local function IsMe(sender)
+    return CanonName(sender) == MyCanonName()
 end
 
-local function IsMe(sender)
-    return ShortName(sender) == UnitName("player")
+-- Is an editor stamp the name of this sender? Stamps are "Name" or, on WoW Forever,
+-- "First Surname" (Red Flag Sync 1.0.1 stamped only the first name there; still accepted).
+local function StampMatches(ed, sender)
+    if type(ed) ~= "string" then return false end
+    if IS_FOREVER then
+        local first = (sender:lower():match("^%s*([^%s%-]+)"))
+        local stamp = ed:lower()
+        return stamp == first or CanonName(ed) == CanonName(sender)
+    end
+    return ed:lower() == DisplayName(sender):lower()
 end
 
 ------------------------------------------------------------------------
@@ -549,8 +607,7 @@ function RS:OnCommReceived(prefix, message, dist, sender)
     if msg.t == "U" then
         if msg.k ~= "players" and msg.k ~= "guilds" then return end
         -- a direct update must be authored by the one sending it
-        if type(msg.e) ~= "table" or type(msg.e.ed) ~= "string"
-            or msg.e.ed:lower() ~= ShortName(sender):lower() then
+        if type(msg.e) ~= "table" or not StampMatches(msg.e.ed, sender) then
             return
         end
         if self:MergeEntry(msg.k, msg.e) then API.Refresh() end
@@ -595,7 +652,7 @@ function RS:OnCommReceived(prefix, message, dist, sender)
 
         if d then d.lastSync = Now() end
         if changed > 0 then
-            Print(("Sync from %s: %d change(s)."):format(ShortName(sender), changed))
+            Print(("Sync from %s: %d change(s)."):format(DisplayName(sender), changed))
         end
         API.Refresh()
         self:UpdateSettings()
@@ -640,9 +697,51 @@ function RS:ImportLegacy()
     g.imported = true
 end
 
+-- WoW Forever: fix data written before surnames were understood (runs once).
+--   * characters were tracked by first name only, so several characters shared one record
+--   * players typed in as "First Surname" were stored with that whole text as name
+function RS:FixForeverNames()
+    local g = self.db.global
+    if not IS_FOREVER or g.foreverNames then return end
+    local suffix = "-" .. MyRealm()
+    for k in pairs(g.characters) do
+        if k:sub(-#suffix) == suffix then g.characters[k] = nil end
+    end
+    local now = Now()
+    for _, d in pairs(g.guildLists) do
+        local t = type(d) == "table" and d.players
+        if type(t) == "table" then
+            local fixes = {}
+            for id, e in pairs(t) do
+                if type(e) == "table" and active(e) and not e.guid and type(e.name) == "string"
+                    and e.name:find("[%s%-]") then
+                    fixes[id] = e
+                end
+            end
+            for oldId, e in pairs(fixes) do
+                local first, surname = e.name:match("^%s*([^%s%-]+)[%s%-]+([^%s%-]+)")
+                if first then
+                    first = first:sub(1, 1):upper() .. first:sub(2):lower()
+                    surname = surname:sub(1, 1):upper() .. surname:sub(2):lower()
+                    local newId = NameKey(first, surname)
+                    if not active(t[newId]) then
+                        local n = CopyTable(e)
+                        n.id, n.name, n.realm, n.mod = newId, first, surname, math.max(now, (e.mod or 0) + 1)
+                        t[newId] = n
+                    end
+                    -- the old entry becomes a removal so other members drop it too
+                    e.del, e.note, e.mod = true, "", math.max(now, (e.mod or 0) + 1)
+                end
+            end
+        end
+    end
+    g.foreverNames = true
+end
+
 function RS:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("RedFlagSyncDB", defaults, true)
     self:ImportLegacy()
+    self:FixForeverNames()
     self:PurgeTombstones()
     API.RegisterListProvider(provider)
     self:RegisterChatCommand("rfs", "SlashCommand")

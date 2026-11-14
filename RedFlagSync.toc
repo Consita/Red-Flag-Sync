@@ -2,7 +2,7 @@
 ## Title: Red Flag Sync
 ## Notes: Adds guild lists to Red Flag and shares them with your guild members
 ## Author: Consita
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: RedFlagSyncDB
 ## Dependencies: RedFlag, Ace3
 
